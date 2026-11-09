@@ -1,3 +1,4 @@
-mss==10.2.0
-pillow==13.0.0
-pip==26.2.1
+mss
+pillow
+sounddevice
+opencv-python-headless
