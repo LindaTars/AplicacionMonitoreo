@@ -229,6 +229,7 @@ class Agente:
                     if self.viendo_servidor:
                         self.pantalla.config(image=self.foto)
                 elif evento == "desconectado":
+                    self.desbloquear()  # sin servidor nadie podría desbloquear
                     self.estado.config(text="Desconectado", fg="red")
                     self._escribir("[sistema] se perdió la conexión con el servidor")
         except queue.Empty:
