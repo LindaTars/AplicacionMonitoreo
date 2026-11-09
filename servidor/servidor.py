@@ -9,6 +9,7 @@ import re
 import socket
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
@@ -16,6 +17,7 @@ from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from comun.pantalla import capturar_jpeg  # noqa: E402
 from comun.protocolo import Conexion, PUERTO, TOKEN  # noqa: E402
 
 CARPETA_RECIBIDOS = Path("recibidos_servidor")
@@ -28,8 +30,10 @@ class Servidor:
         self.cola = queue.Queue()   # los hilos de red dejan aquí lo que pasa
         self.viendo = None          # nombre de la PC que estamos viendo
         self.foto = None
+        self.transmitiendo = set()  # PCs que están viendo la pantalla del servidor (3.5)
         self._armar_ventana()
         threading.Thread(target=self._aceptar, daemon=True).start()
+        threading.Thread(target=self._transmitir_pantalla, daemon=True).start()
         self.raiz.after(100, self._procesar_cola)
 
     # ---------- ventana ----------
@@ -186,6 +190,7 @@ class Servidor:
 
         with self.candado:
             self.clientes.pop(nombre, None)
+            self.transmitiendo.discard(nombre)
         con.cerrar()
         self.cola.put(("desconectado", nombre, None))
 
@@ -220,11 +225,43 @@ class Servidor:
             imagen.thumbnail((800, 450))
             self.foto = ImageTk.PhotoImage(imagen)
             self.pantalla.config(image=self.foto)
+        elif tipo == "ver_servidor":
+            with self.candado:
+                if datos.get("activo"):
+                    self.transmitiendo.add(nombre)
+                else:
+                    self.transmitiendo.discard(nombre)
         elif tipo == "archivo":
             CARPETA_RECIBIDOS.mkdir(exist_ok=True)
             destino = CARPETA_RECIBIDOS / f"{nombre}_{Path(datos.get('nombre', 'archivo')).name}"
             destino.write_bytes(binario)
             self._escribir(f"[sistema] archivo recibido de {nombre}: {destino}")
+
+    # 3.5: mostrar a los agentes lo que hace el servidor
+    def _transmitir_pantalla(self):
+        while True:
+            time.sleep(0.5)
+            with self.candado:
+                destinos = [(n, self.clientes.get(n)) for n in self.transmitiendo]
+            if not destinos:
+                continue
+            try:
+                jpeg = capturar_jpeg()
+            except Exception as e:
+                for n, con in destinos:
+                    try:
+                        con.enviar("estado", {"ok": False, "mensaje": f"el servidor no pudo capturar su pantalla: {e}"})
+                    except (OSError, AttributeError):
+                        pass
+                with self.candado:
+                    self.transmitiendo.clear()
+                continue
+            for n, con in destinos:
+                try:
+                    con.enviar("imagen_servidor", binario=jpeg)
+                except (OSError, AttributeError):
+                    with self.candado:
+                        self.transmitiendo.discard(n)
 
     def iniciar(self):
         self.raiz.mainloop()
