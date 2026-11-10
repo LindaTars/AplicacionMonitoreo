@@ -25,6 +25,14 @@ EVIOCGRAB = 0x40044590  # orden del kernel: "este programa se queda con el dispo
 LIBRES = ("power button", "sleep button", "lid switch", "video bus")  # no se bloquean
 
 
+def limpiar_cache_dns():
+    """Para que el cambio se note de inmediato (si el sistema usa systemd-resolved)."""
+    try:
+        subprocess.run(["resolvectl", "flush-caches"], capture_output=True)
+    except FileNotFoundError:
+        pass
+
+
 # ---------- páginas web (3.9) ----------
 def permitir_webs():
     lineas = HOSTS.read_text().splitlines()
@@ -37,6 +45,7 @@ def permitir_webs():
         elif not dentro:
             limpias.append(linea)
     HOSTS.write_text("\n".join(limpias) + "\n")
+    limpiar_cache_dns()
 
 
 def bloquear_webs(sitios):
@@ -45,10 +54,12 @@ def bloquear_webs(sitios):
     for sitio in sitios:
         sitio = sitio.strip().lower().removeprefix("www.")
         if re.fullmatch(r"[a-z0-9.-]+", sitio):  # evita meter basura en /etc/hosts
-            nuevas += [f"127.0.0.1 {sitio}", f"127.0.0.1 www.{sitio}"]
+            nuevas += [f"127.0.0.1 {sitio}", f"127.0.0.1 www.{sitio}",
+                       f"::1 {sitio}", f"::1 www.{sitio}"]  # ::1 = lo mismo para IPv6
     nuevas.append(MARCA_FIN)
     with HOSTS.open("a") as f:
         f.write("\n".join(nuevas) + "\n")
+    limpiar_cache_dns()
 
 
 # ---------- ping (3.10) ----------
