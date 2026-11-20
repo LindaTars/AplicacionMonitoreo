@@ -23,6 +23,8 @@ from comun.pantalla import capturar_jpeg  # noqa: E402
 from comun.protocolo import Conexion, PUERTO, TOKEN  # noqa: E402
 
 CARPETA_RECIBIDOS = Path(__file__).resolve().parent.parent / "recibidos_servidor"
+MAX_PANTALLAS = 3          # punto 3.4: ver hasta 3 PCs a la vez
+ANCHO, ALTO = 320, 180     # tamaño de cada cuadro de pantalla
 
 
 class Servidor:
@@ -30,8 +32,8 @@ class Servidor:
         self.clientes = {}          # nombre -> Conexion
         self.candado = threading.Lock()
         self.cola = queue.Queue()   # los hilos de red dejan aquí lo que pasa
-        self.viendo = None          # nombre de la PC que estamos viendo
-        self.foto = None
+        self.viendo = {}            # nombre de la PC -> posición (0, 1 o 2) en la cuadrícula
+        self.fotos = [None] * MAX_PANTALLAS
         self.transmitiendo = set()  # PCs que están viendo la pantalla del servidor (3.5)
 
         # llamadas (una a la vez)
@@ -60,16 +62,28 @@ class Servidor:
         der = tk.Frame(self.raiz)
         der.pack(side="left", fill="both", expand=True, padx=6, pady=6)
 
-        self.vacio = tk.PhotoImage(width=800, height=450)
-        self.vacio.put("black", to=(0, 0, 800, 450))
-        self.pantalla = tk.Label(der, image=self.vacio)
-        self.pantalla.pack()
+        self.vacio = tk.PhotoImage(width=ANCHO, height=ALTO)
+        self.vacio.put("black", to=(0, 0, ANCHO, ALTO))
+        cuadricula = tk.Frame(der)
+        cuadricula.pack()
+        self.titulos, self.pantallas = [], []
+        for i in range(MAX_PANTALLAS):
+            marco = tk.Frame(cuadricula)
+            marco.grid(row=0, column=i, padx=2)
+            titulo = tk.Label(marco, text="(libre)")
+            titulo.pack()
+            etiqueta = tk.Label(marco, image=self.vacio)
+            etiqueta.pack()
+            self.titulos.append(titulo)
+            self.pantallas.append(etiqueta)
 
         botones = tk.Frame(der)
         botones.pack(fill="x", pady=4)
-        self.boton_pantalla = tk.Button(botones, text="Ver pantalla", command=self.alternar_pantalla)
+        self.boton_pantalla = tk.Button(botones, text="Ver / dejar de ver", command=self.alternar_pantalla)
+        self.boton_todas = tk.Button(botones, text="Ver todas (hasta 3)", command=self.ver_todas)
         acciones = [
             self.boton_pantalla,
+            self.boton_todas,
             tk.Button(botones, text="Bloquear teclado/mouse", command=lambda: self._orden("bloquear")),
             tk.Button(botones, text="Desbloquear", command=lambda: self._orden("desbloquear")),
             tk.Button(botones, text="Apagar PC", command=self.apagar),
@@ -123,21 +137,54 @@ class Servidor:
             self._escribir(f"[sistema] error enviando a {nombre}: {e}")
             return False
 
-    def alternar_pantalla(self):
-        if self.viendo:
-            self._orden("ver_pantalla", {"activo": False}, nombre=self.viendo)
-            self._dejar_de_ver()
-            return
-        nombre = self._seleccionada()
-        if nombre:
-            self._orden("ver_pantalla", {"activo": True}, nombre=nombre)
-            self.viendo = nombre
-            self.boton_pantalla.config(text="Dejar de ver")
+    def _posicion_libre(self):
+        usadas = set(self.viendo.values())
+        for i in range(MAX_PANTALLAS):
+            if i not in usadas:
+                return i
+        return None
 
-    def _dejar_de_ver(self):
-        self.viendo = None
-        self.boton_pantalla.config(text="Ver pantalla")
-        self.pantalla.config(image=self.vacio)
+    def _empezar_a_ver(self, nombre):
+        if nombre in self.viendo:
+            return
+        posicion = self._posicion_libre()
+        if posicion is None:
+            self._escribir(f"[sistema] solo se pueden ver {MAX_PANTALLAS} pantallas a la vez")
+            return
+        if self._orden("ver_pantalla", {"activo": True}, nombre=nombre):
+            self.viendo[nombre] = posicion
+            self.titulos[posicion].config(text=nombre)
+
+    def _dejar_de_ver(self, nombre, avisar=True):
+        posicion = self.viendo.pop(nombre, None)
+        if posicion is None:
+            return
+        if avisar:
+            self._orden("ver_pantalla", {"activo": False}, nombre=nombre)
+        self.titulos[posicion].config(text="(libre)")
+        self.pantallas[posicion].config(image=self.vacio)
+
+    def alternar_pantalla(self):
+        """Ver (o dejar de ver) la PC elegida en la lista."""
+        nombre = self._seleccionada()
+        if not nombre:
+            return
+        if nombre in self.viendo:
+            self._dejar_de_ver(nombre)
+        else:
+            self._empezar_a_ver(nombre)
+
+    def ver_todas(self):
+        """Ver las primeras 3 PCs conectadas a la vez (punto 3.4)."""
+        if self.viendo:
+            for nombre in list(self.viendo):
+                self._dejar_de_ver(nombre)
+            self.boton_todas.config(text="Ver todas (hasta 3)")
+            return
+        for nombre in list(self.clientes)[:MAX_PANTALLAS]:
+            self._empezar_a_ver(nombre)
+        if self.viendo:
+            self.boton_todas.config(text="Dejar de ver todas")
 
     def apagar(self):
         nombre = self._seleccionada()
@@ -290,8 +337,7 @@ class Servidor:
                     nombres = self.lista.get(0, "end")
                     if nombre in nombres:
                         self.lista.delete(nombres.index(nombre))
-                    if nombre == self.viendo:
-                        self._dejar_de_ver()
+                    self._dejar_de_ver(nombre, avisar=False)
                     if nombre in (self.par_llamada, self.llamando_a):
                         self._terminar_llamada()
                     self._escribir(f"[sistema] {nombre} se desconectó")
@@ -309,11 +355,12 @@ class Servidor:
         elif tipo == "estado":
             estado = "OK" if datos.get("ok") else "ERROR"
             self._escribir(f"[{nombre}] {estado}: {datos.get('mensaje', '')}")
-        elif tipo == "imagen" and nombre == self.viendo:
+        elif tipo == "imagen" and nombre in self.viendo:
+            posicion = self.viendo[nombre]
             imagen = Image.open(io.BytesIO(binario))
-            imagen.thumbnail((800, 450))
-            self.foto = ImageTk.PhotoImage(imagen)
-            self.pantalla.config(image=self.foto)
+            imagen.thumbnail((ANCHO, ALTO))
+            self.fotos[posicion] = ImageTk.PhotoImage(imagen)
+            self.pantallas[posicion].config(image=self.fotos[posicion])
         elif tipo == "video":
             if nombre == self.par_llamada and self.ventana_llamada:
                 self.ventana_llamada.mostrar(binario)
