@@ -15,11 +15,12 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from comun import tema  # noqa: E402
 from comun.archivos import abrir_carpeta, demasiado_grande, elegir_archivo  # noqa: E402
 from comun.llamada import Llamada, VentanaLlamada  # noqa: E402
 from comun.pantalla import capturar_jpeg  # noqa: E402
@@ -70,45 +71,91 @@ class Agente:
     def _armar_ventana(self):
         self.raiz = tk.Tk()
         self.raiz.title(f"Agente {self.nombre}")
+        self.raiz.geometry("900x720")
+        self.raiz.minsize(800, 640)
+        tema.aplicar(self.raiz)
 
-        self.vacio = tk.PhotoImage(width=640, height=360)
-        self.vacio.put("black", to=(0, 0, 640, 360))
-        self.pantalla = tk.Label(self.raiz, image=self.vacio)
-        self.pantalla.pack(padx=6, pady=6)
-
-        barra = tk.Frame(self.raiz)
-        barra.pack(fill="x", padx=6)
-        self.boton_ver = tk.Button(barra, text="Ver pantalla del servidor", command=self.alternar_servidor)
-        self.boton_ver.pack(side="left")
-        self.estado = tk.Label(barra, text="Conectando...", fg="orange")
+        cabecera = ttk.Frame(self.raiz, padding=(20, 14))
+        cabecera.pack(fill="x")
+        ttk.Label(cabecera, text=f"Agente: {self.nombre}", style="Titulo.TLabel").pack(side="left")
+        self.estado = ttk.Label(cabecera, text="Conectando...", style="Suave.TLabel")
+        self.estado.configure(foreground=tema.COLORES["amarillo"])
         self.estado.pack(side="right")
 
-        barra2 = tk.Frame(self.raiz)
-        barra2.pack(fill="x", padx=6, pady=4)
-        for texto, accion in [
-            ("Llamar", lambda: self.llamar(False)),
-            ("Videollamada", lambda: self.llamar(True)),
-            ("Enviar archivo", self.enviar_archivo),
-            ("Abrir recibidos", lambda: abrir_carpeta(CARPETA_RECIBIDOS)),
-        ]:
-            tk.Button(barra2, text=texto, command=accion).pack(side="left", padx=2)
+        self.apartados = ttk.Notebook(self.raiz)
+        self.apartados.pack(fill="both", expand=True, padx=20, pady=(0, 16))
 
-        self.chat = tk.Text(self.raiz, height=10, state="disabled")
-        self.chat.pack(fill="both", expand=True, padx=6, pady=6)
-        escribir = tk.Frame(self.raiz)
-        escribir.pack(fill="x", padx=6, pady=(0, 6))
-        self.entrada = tk.Entry(escribir)
-        self.entrada.pack(side="left", fill="x", expand=True)
+        # --- apartado Servidor: ver lo que hace el servidor (punto 3.5)
+        servidor = ttk.Frame(self.apartados, padding=18)
+        self.apartados.add(servidor, text="Servidor")
+        ttk.Label(servidor, text="Pantalla del servidor", style="Seccion.TLabel").pack(anchor="w", pady=(0, 10))
+        tarjeta = ttk.Frame(servidor, style="Tarjeta.TFrame", padding=10)
+        tarjeta.pack(anchor="w")
+        self.vacio = tk.PhotoImage(width=640, height=360)
+        self.vacio.put("#000000", to=(0, 0, 640, 360))
+        self.pantalla = tk.Label(tarjeta, image=self.vacio, bd=0, bg="#000000")
+        self.pantalla.pack()
+        self.boton_ver = ttk.Button(servidor, text="Ver pantalla del servidor", style="Acento.TButton",
+                                    command=self.alternar_servidor)
+        self.boton_ver.pack(anchor="w", pady=14)
+
+        # --- apartado Comunicación: chat, archivos y llamadas
+        self.marco_comunicacion = ttk.Frame(self.apartados, padding=18)
+        comunicacion = self.marco_comunicacion
+        self.apartados.add(comunicacion, text="Comunicación")
+        comunicacion.columnconfigure(0, weight=1)
+        comunicacion.rowconfigure(0, weight=1)
+
+        chat = tema.tarjeta(comunicacion, "Chat con el servidor")
+        chat.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        zona, self.chat = tema.texto_con_barra(chat)
+        zona.pack(fill="both", expand=True)
+        escribir = ttk.Frame(chat, style="Tarjeta.TFrame")
+        escribir.pack(fill="x", pady=(10, 0))
+        self.entrada = ttk.Entry(escribir)
+        self.entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.entrada.bind("<Return>", lambda e: self.enviar_chat())
-        tk.Button(escribir, text="Enviar", command=self.enviar_chat).pack(side="left")
+        ttk.Button(escribir, text="Enviar", style="Acento.TButton", command=self.enviar_chat).pack(side="left")
 
+        lado = ttk.Frame(comunicacion)
+        lado.grid(row=0, column=1, sticky="n")
+        archivos = tema.tarjeta(lado, "Archivos")
+        archivos.pack(fill="x", padx=8, pady=8)
+        tema.botones(archivos, [
+            ("Enviar archivo", "Acento.TButton", self.enviar_archivo),
+            ("Abrir recibidos", "TButton", lambda: abrir_carpeta(CARPETA_RECIBIDOS)),
+        ], "Los archivos recibidos se guardan en la carpeta recibidos_agente.")
+        llamadas = tema.tarjeta(lado, "Llamadas")
+        llamadas.pack(fill="x", padx=8, pady=8)
+        tema.botones(llamadas, [
+            ("Llamar", "TButton", lambda: self.llamar(False)),
+            ("Videollamada", "Acento.TButton", lambda: self.llamar(True)),
+        ], "Usen audífonos para evitar el eco.")
+
+        # --- apartado Registro: lo que va pasando
+        registro = ttk.Frame(self.apartados, padding=18)
+        self.apartados.add(registro, text="Registro")
+        zona, self.registro = tema.texto_con_barra(registro, alto=20)
+        zona.pack(fill="both", expand=True)
+
+        self.apartados.bind("<<NotebookTabChanged>>", self._pestana_cambio)
         self.raiz.protocol("WM_DELETE_WINDOW", self.cerrar)
 
     def _escribir(self, texto):
-        self.chat.config(state="normal")
-        self.chat.insert("end", texto + "\n")
-        self.chat.see("end")
-        self.chat.config(state="disabled")
+        """Escribe en el apartado Registro."""
+        etiqueta = "error" if ("ERROR" in texto or "no se pudo" in texto.lower()) else "suave"
+        tema.agregar_linea(self.registro, texto, etiqueta)
+
+    def _escribir_chat(self, texto, propio=False):
+        tema.agregar_linea(self.chat, texto, "propio" if propio else "otro")
+
+    def _aviso_chat(self):
+        """Marca el apartado Comunicación si llega un mensaje y no se está viendo."""
+        if self.apartados.select() != str(self.marco_comunicacion):
+            self.apartados.tab(self.marco_comunicacion, text="Comunicación ●")
+
+    def _pestana_cambio(self, _evento=None):
+        self.apartados.tab(self.marco_comunicacion, text="Comunicación")
 
     def _enviar(self, tipo, datos=None, binario=b""):
         try:
@@ -122,7 +169,7 @@ class Agente:
     def enviar_chat(self):
         texto = self.entrada.get().strip()
         if texto and self._enviar("chat", {"texto": texto}):
-            self._escribir(f"Tú: {texto}")
+            self._escribir_chat(f"Tú: {texto}", propio=True)
             self.entrada.delete(0, "end")
 
     def enviar_archivo(self):
@@ -191,7 +238,7 @@ class Agente:
             messagebox.showerror("No se pudo conectar", f"{self.ip}:{PUERTO}\n{e}")
             self.raiz.destroy()
             return
-        self.estado.config(text=f"Conectado a {self.ip}", fg="green")
+        self.estado.config(text=f"● Conectado a {self.ip}", foreground=tema.COLORES["verde"])
         threading.Thread(target=self._hilo_red, daemon=True).start()
         threading.Thread(target=self._hilo_pantalla, daemon=True).start()
         self.raiz.after(100, self._procesar_cola)
@@ -224,7 +271,8 @@ class Agente:
             while True:
                 evento, dato = self.cola.get_nowait()
                 if evento == "chat":
-                    self._escribir(f"Servidor: {dato}")
+                    self._escribir_chat(f"Servidor: {dato}")
+                    self._aviso_chat()
                 elif evento == "log":
                     self._escribir(f"[sistema] {dato}")
                 elif evento == "imagen":
@@ -241,7 +289,7 @@ class Agente:
                 elif evento == "desconectado":
                     self.desbloquear()
                     self._terminar_llamada()
-                    self.estado.config(text="Desconectado", fg="red")
+                    self.estado.config(text="● Desconectado", foreground=tema.COLORES["rojo"])
                     self._escribir("[sistema] se perdió la conexión con el servidor")
         except queue.Empty:
             pass

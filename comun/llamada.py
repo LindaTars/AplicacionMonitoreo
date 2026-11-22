@@ -10,8 +10,11 @@ import queue
 import threading
 import time
 import tkinter as tk
+from tkinter import ttk
 
 from PIL import Image, ImageTk
+
+from . import tema
 
 TASA = 16000   # muestras de audio por segundo
 BLOQUE = 512   # muestras por paquete (32 ms)
@@ -102,17 +105,18 @@ class VentanaLlamada:
     def __init__(self, raiz, titulo, con_video, al_colgar):
         self.ventana = tk.Toplevel(raiz)
         self.ventana.title(titulo)
+        self.ventana.configure(bg=tema.COLORES["fondo"])
         self.ventana.protocol("WM_DELETE_WINDOW", al_colgar)
         texto = "Esperando video..." if con_video else "Llamada de voz en curso"
-        self.etiqueta = tk.Label(self.ventana, text=texto, padx=60, pady=40)
-        self.etiqueta.pack(padx=6, pady=6)
-        tk.Button(self.ventana, text="Colgar", command=al_colgar).pack(pady=6)
+        self.etiqueta = ttk.Label(self.ventana, text=texto, padding=(60, 40))
+        self.etiqueta.pack(padx=16, pady=(16, 6))
+        ttk.Button(self.ventana, text="Colgar", style="Peligro.TButton", command=al_colgar).pack(pady=(6, 16))
         self.foto = None
 
     def mostrar(self, jpeg):
         imagen = Image.open(io.BytesIO(jpeg))
         self.foto = ImageTk.PhotoImage(imagen)
-        self.etiqueta.config(image=self.foto, text="", padx=0, pady=0)
+        self.etiqueta.config(image=self.foto, text="", padding=0)
 
     def cerrar(self):
         try:
