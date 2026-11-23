@@ -62,13 +62,27 @@ def bloquear_webs(sitios):
     limpiar_cache_dns()
 
 
-# ---------- ping (3.10) ----------
-def cambiar_ping(permitir):
-    valor = "0" if permitir else "1"
-    r = subprocess.run(["sysctl", "-w", f"net.ipv4.icmp_echo_ignore_all={valor}"], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(r.stderr.strip() or "sysctl falló")
+# ---------- ping (3.10): el cliente NO puede hacer ping hacia afuera ----------
+TABLA_PING = "bloqueo_app_ping"
 
+
+def cambiar_ping(permitir):
+    # Siempre borra la tabla anterior (si existe) para no duplicar reglas.
+    subprocess.run(["nft", "delete", "table", "inet", TABLA_PING], capture_output=True)
+    if permitir:
+        return
+    reglas = f"""
+table inet {TABLA_PING} {{
+    chain salida {{
+        type filter hook output priority 0; policy accept;
+        icmp type echo-request drop
+        icmpv6 type echo-request drop
+    }}
+}}
+"""
+    r = subprocess.run(["nft", "-f", "-"], input=reglas, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or "nft falló")
 
 # ---------- teclado y mouse (3.6 y 3.7) ----------
 def dispositivos():
