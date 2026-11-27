@@ -23,6 +23,7 @@ Un servidor central administra uno o varios clientes (agentes) con chat, llamada
 | 📁 **Transferencia de archivos** | Envío de archivos en ambas direcciones (se guardan en `recibidos_servidor/` y `recibidos_agente/`). |
 | 🖼️ **Vista de pantalla** | El servidor puede ver la pantalla del cliente, y el cliente la del servidor. |
 | ⌨️ **Bloqueo de teclado y mouse** | Toma control exclusivo de los dispositivos de entrada (funciona en X11 y Wayland). Se desbloquea solo tras un tiempo máximo de seguridad (120 s). |
+| 🪞 **Exhibir un cliente** | El servidor muestra la pantalla de una PC (por ejemplo, la PC2) en otra PC (la PC3), actuando como intermediario. Se elige la PC en la lista y, con *Exhibir PC elegida en...*, la PC destino. |
 | 🌐 **Bloqueo de páginas web** | Agrega y quita sitios bloqueados editando `/etc/hosts` (IPv4 e IPv6, con y sin `www.`). |
 | 📡 **Bloqueo de ping** | Impide que el cliente **envíe** pings (ICMP echo-request) con una regla de nftables. El servidor sí puede seguir haciendo ping al cliente. |
 | ⏻ **Apagado remoto** | Apaga el equipo cliente con `systemctl poweroff`. |
@@ -109,7 +110,7 @@ python servidor/servidor.py
 ```bash
 python cliente/agente.py IP_DEL_SERVIDOR [nombre]
 ```
-
+Buscar los mejores hiperparámetros del bosque de dígitos
 - `IP_DEL_SERVIDOR`: la IP del equipo donde corre el servidor. Si no la pasas, el agente la pide en una ventanita.
 - `nombre` *(opcional)*: cómo aparecerá el cliente en el servidor. Por defecto usa el nombre del equipo.
 

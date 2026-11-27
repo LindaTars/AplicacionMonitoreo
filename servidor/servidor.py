@@ -60,6 +60,7 @@ class Servidor:
         self.viendo = {}            # nombre de la PC -> posición (0, 1 o 2) en la cuadrícula
         self.fotos = [None] * MAX_PANTALLAS
         self.transmitiendo = set()  # PCs que están viendo la pantalla del servidor (3.5)
+        self.exhibiciones = {}      # PC origen -> PCs donde se muestra su pantalla ("exhibir un cliente")
 
         # llamadas (una a la vez)
         self.llamada = Llamada(lambda t: self.cola.put(("aviso", "", t)))
@@ -258,6 +259,14 @@ class Servidor:
             botones, "Dejar de ver todas" if self.viendo else "Ver todas (hasta 3)", self.ver_todas, "suave")
         self.boton_todas.pack(side="left")
 
+        exhibir = tk.Frame(i, bg=c["panel"])
+        exhibir.pack(anchor="w", pady=(10, 0))
+        self.boton_exhibir = tema.Pildora(exhibir, "Exhibir PC elegida en...", self.elegir_destino, "acento")
+        self.boton_exhibir.pack(side="left", padx=(0, 10))
+        tema.Pildora(exhibir, "Dejar de exhibir", self.dejar_de_exhibir, "suave").pack(side="left")
+        self.lbl_exhibicion = tk.Label(i, text="", font=tema.fuente(9), bg=c["panel"], fg=c["suave"])
+        self.lbl_exhibicion.pack(anchor="w", pady=(8, 0))
+
         # si se cambió de tema con pantallas abiertas, se vuelven a poner
         for nombre, posicion in self.viendo.items():
             self.titulos[posicion].config(text=nombre)
@@ -375,11 +384,25 @@ class Servidor:
             self._poner_estado_pc(nombre)
         self._refrescar_perfil()
         self._texto_objetivo()
+        self._texto_exhibicion()
+
+    def _texto_exhibicion(self):
+        if hasattr(self, "lbl_exhibicion") and self.lbl_exhibicion.winfo_exists():
+            if self.exhibiciones:
+                partes = [f"{o} → {', '.join(sorted(d))}" for o, d in self.exhibiciones.items()]
+                self.lbl_exhibicion.config(text="Exhibiendo:  " + "   ·   ".join(partes), fg=tema.COLORES["acento"])
+            else:
+                self.lbl_exhibicion.config(text="Sin exhibiciones activas", fg=tema.COLORES["suave"])
 
     def _poner_estado_pc(self, nombre):
         c = tema.COLORES
+        origen = next((o for o, d in self.exhibiciones.items() if nombre in d), None)
         if nombre in self.viendo:
             self.lista.estado(nombre, "● Pantalla en vivo", c["acento"])
+        elif nombre in self.exhibiciones:
+            self.lista.estado(nombre, "● Se está exhibiendo", c["acento"])
+        elif origen:
+            self.lista.estado(nombre, f"● Viendo a {origen}", c["acento"])
         elif nombre == self.par_llamada:
             self.lista.estado(nombre, "● En llamada", c["amarillo"])
         else:
@@ -420,6 +443,7 @@ class Servidor:
         for etiqueta, valor in (
             ("Su pantalla", "en vivo" if nombre in self.viendo else "sin ver"),
             ("Ve la tuya", "sí" if nombre in self.transmitiendo else "no"),
+            ("Exhibida en", ", ".join(sorted(self.exhibiciones.get(nombre, ()))) or "ninguna"),
             ("Llamada", "en curso" if nombre == self.par_llamada else "ninguna"),
         ):
             linea = tk.Frame(datos, bg=c["panel"])
@@ -492,7 +516,7 @@ class Servidor:
         posicion = self.viendo.pop(nombre, None)
         if posicion is None:
             return
-        if avisar:
+        if avisar and nombre not in self.exhibiciones:  # si se exhibe, su pantalla debe seguir capturándose
             self._orden("ver_pantalla", {"activo": False}, nombre=nombre)
         self.fotos[posicion] = None
         self.titulos[posicion].config(text="(libre)")
@@ -520,6 +544,86 @@ class Servidor:
             self._empezar_a_ver(nombre)
         if self.viendo:
             self.boton_todas.cambiar_texto("Dejar de ver todas")
+
+    # ---------- exhibir un cliente: mostrar la pantalla de una PC en otra ----------
+    def elegir_destino(self):
+        """Muestra un menú con las demás PCs; la que se elija verá la pantalla de la PC seleccionada."""
+        origen = self._seleccionada()
+        if not origen:
+            return
+        otras = [n for n in self.clientes if n != origen]
+        if not otras:
+            messagebox.showinfo("Aviso", "Necesitas al menos otra PC conectada para exhibir.")
+            return
+        c = tema.COLORES
+        menu = tk.Menu(self.raiz, tearoff=0, bg=c["panel"], fg=c["texto"], activebackground=c["acento"],
+                       activeforeground=c["sobre_acento"], bd=0, font=tema.fuente(10))
+        menu.add_command(label=f"Mostrar la pantalla de {origen} en:", state="disabled")
+        menu.add_separator()
+        for destino in otras:
+            activa = destino in self.exhibiciones.get(origen, ())
+            menu.add_command(label=("✓  " if activa else "     ") + destino,
+                             command=lambda d=destino: self._alternar_exhibicion(origen, d))
+        x = self.boton_exhibir.winfo_rootx()
+        y = self.boton_exhibir.winfo_rooty() + self.boton_exhibir.winfo_height() + 4
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _alternar_exhibicion(self, origen, destino):
+        if destino in self.exhibiciones.get(origen, ()):
+            self._detener_exhibicion(origen, destino)
+        else:
+            self._iniciar_exhibicion(origen, destino)
+
+    def _iniciar_exhibicion(self, origen, destino):
+        if origen == destino or origen not in self.clientes or destino not in self.clientes:
+            return
+        if destino in self.exhibiciones.get(origen, ()):
+            return
+        if not self._orden("exhibir", {"origen": origen, "activo": True}, nombre=destino):
+            return
+        if not self._orden("ver_pantalla", {"activo": True}, nombre=origen):  # que la origen mande su pantalla
+            self._orden("exhibir", {"origen": origen, "activo": False}, nombre=destino)
+            return
+        self.exhibiciones.setdefault(origen, set()).add(destino)
+        self._escribir(f"[sistema] exhibiendo la pantalla de {origen} en {destino}")
+        self._actualizar_estado()
+
+    def _detener_exhibicion(self, origen, destino=None):
+        """Quita una exhibición (origen -> destino) o todas las de esa PC origen."""
+        destinos = self.exhibiciones.get(origen)
+        if not destinos:
+            return
+        for d in ([destino] if destino else list(destinos)):
+            if d in destinos:
+                destinos.discard(d)
+                if d in self.clientes:
+                    self._orden("exhibir", {"origen": origen, "activo": False}, nombre=d)
+                self._escribir(f"[sistema] se dejó de exhibir {origen} en {d}")
+        if not destinos:
+            self.exhibiciones.pop(origen, None)
+            if origen not in self.viendo and origen in self.clientes:
+                self._orden("ver_pantalla", {"activo": False}, nombre=origen)
+        self._actualizar_estado()
+
+    def dejar_de_exhibir(self):
+        """Termina todas las exhibiciones de la PC elegida."""
+        origen = self._seleccionada()
+        if not origen:
+            return
+        if origen in self.exhibiciones:
+            self._detener_exhibicion(origen)
+        else:
+            self._escribir(f"[sistema] {origen} no se está exhibiendo")
+
+    def _quitar_de_exhibiciones(self, nombre):
+        """Una PC se desconectó: se cancela lo que exhibía y lo que veía."""
+        self._detener_exhibicion(nombre)
+        for origen in list(self.exhibiciones):
+            if nombre in self.exhibiciones.get(origen, ()):
+                self._detener_exhibicion(origen, nombre)
 
     def apagar(self):
         nombre = self._seleccionada()
@@ -673,6 +777,7 @@ class Servidor:
                     self._actualizar_estado()
                 elif evento == "desconectado":
                     self.lista.quitar(nombre)
+                    self._quitar_de_exhibiciones(nombre)
                     self._dejar_de_ver(nombre, avisar=False)
                     if nombre in (self.par_llamada, self.llamando_a):
                         self._terminar_llamada()
@@ -693,12 +798,18 @@ class Servidor:
         elif tipo == "estado":
             estado = "OK" if datos.get("ok") else "ERROR"
             self._escribir(f"[{nombre}] {estado}: {datos.get('mensaje', '')}")
-        elif tipo == "imagen" and nombre in self.viendo:
-            posicion = self.viendo[nombre]
-            imagen = Image.open(io.BytesIO(binario))
-            imagen.thumbnail((ANCHO, ALTO))
-            self.fotos[posicion] = ImageTk.PhotoImage(imagen)
-            self.pantallas[posicion].config(image=self.fotos[posicion])
+        elif tipo == "imagen":
+            if nombre in self.viendo:
+                posicion = self.viendo[nombre]
+                imagen = Image.open(io.BytesIO(binario))
+                imagen.thumbnail((ANCHO, ALTO))
+                self.fotos[posicion] = ImageTk.PhotoImage(imagen)
+                self.pantallas[posicion].config(image=self.fotos[posicion])
+            for destino in list(self.exhibiciones.get(nombre, ())):  # exhibir: reenviar tal cual a las PCs destino
+                try:
+                    self.clientes[destino].enviar("imagen_exhibida", {"origen": nombre}, binario)
+                except (OSError, KeyError, AttributeError):
+                    self._detener_exhibicion(nombre, destino)
         elif tipo == "video":
             if nombre == self.par_llamada and self.ventana_llamada:
                 self.ventana_llamada.mostrar(binario)
