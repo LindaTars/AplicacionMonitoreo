@@ -59,6 +59,8 @@ class Agente:
         self.viendo = threading.Event()    # ¿el servidor está viendo mi pantalla?
         self.viendo_servidor = False
         self.foto = None
+        self.foto_exhibida = None
+        self.origen_exhibido = None        # PC cuya pantalla me muestra el servidor (exhibir un cliente)
         self.bloqueador = None             # proceso que tiene bloqueados teclado y mouse
         self.llamada = Llamada(lambda t: self.cola.put(("log", t)))
         self.ventana_llamada = None
@@ -98,6 +100,18 @@ class Agente:
         self.boton_ver = ttk.Button(servidor, text="Ver pantalla del servidor", style="Acento.TButton",
                                     command=self.alternar_servidor)
         self.boton_ver.pack(anchor="w", pady=14)
+
+        # --- apartado Exhibición: la pantalla de otra PC, que el servidor me muestra
+        self.marco_exhibicion = ttk.Frame(self.apartados, padding=18)
+        self.apartados.add(self.marco_exhibicion, text="Exhibición")
+        self.titulo_exhibicion = ttk.Label(self.marco_exhibicion, text="Sin exhibición activa", style="Seccion.TLabel")
+        self.titulo_exhibicion.pack(anchor="w", pady=(0, 10))
+        tarjeta_ex = ttk.Frame(self.marco_exhibicion, style="Tarjeta.TFrame", padding=10)
+        tarjeta_ex.pack(anchor="w")
+        self.pantalla_exhibida = tk.Label(tarjeta_ex, image=self.vacio, bd=0, bg="#000000")
+        self.pantalla_exhibida.pack()
+        ttk.Label(self.marco_exhibicion, text="Aquí el servidor te muestra la pantalla de otra PC.",
+                  style="Suave.TLabel").pack(anchor="w", pady=14)
 
         # --- apartado Comunicación: chat, archivos y llamadas
         self.marco_comunicacion = ttk.Frame(self.apartados, padding=18)
@@ -199,6 +213,24 @@ class Agente:
             self.boton_ver.config(text="Ver pantalla del servidor")
             self.pantalla.config(image=self.vacio)
 
+    def _exhibicion(self, datos):
+        """El servidor empieza o termina de mostrarme la pantalla de otra PC."""
+        origen = datos.get("origen", "?")
+        if datos.get("activo"):
+            self.origen_exhibido = origen
+            self.titulo_exhibicion.config(text=f"Pantalla de {origen}")
+            self.pantalla_exhibida.config(image=self.vacio)
+            self.apartados.select(self.marco_exhibicion)
+            self._escribir(f"[sistema] el servidor te muestra la pantalla de {origen}")
+        elif origen == self.origen_exhibido:
+            self._limpiar_exhibicion()
+            self._escribir(f"[sistema] terminó la exhibición de {origen}")
+
+    def _limpiar_exhibicion(self):
+        self.origen_exhibido = None
+        self.titulo_exhibicion.config(text="Sin exhibición activa")
+        self.pantalla_exhibida.config(image=self.vacio)
+
     # ---------- llamadas ----------
     def llamar(self, con_video):
         if self.en_llamada or self.llamando:
@@ -281,12 +313,22 @@ class Agente:
                     self.foto = ImageTk.PhotoImage(imagen)
                     if self.viendo_servidor:
                         self.pantalla.config(image=self.foto)
+                elif evento == "exhibir":
+                    self._exhibicion(dato)
+                elif evento == "imagen_exhibida":
+                    origen, jpeg = dato
+                    if origen == self.origen_exhibido:
+                        imagen = Image.open(io.BytesIO(jpeg))
+                        imagen.thumbnail((640, 360))
+                        self.foto_exhibida = ImageTk.PhotoImage(imagen)
+                        self.pantalla_exhibida.config(image=self.foto_exhibida)
                 elif evento == "video":
                     if self.ventana_llamada:
                         self.ventana_llamada.mostrar(dato)
                 elif evento == "llamada":
                     self._llamada_recibida(*dato)
                 elif evento == "desconectado":
+                    self._limpiar_exhibicion()
                     self.desbloquear()
                     self._terminar_llamada()
                     self.estado.config(text="● Desconectado", foreground=tema.COLORES["rojo"])
@@ -360,6 +402,12 @@ class Agente:
             return
         if tipo == "imagen_servidor":
             self.cola.put(("imagen", binario))
+            return
+        if tipo == "exhibir":
+            self.cola.put(("exhibir", datos))
+            return
+        if tipo == "imagen_exhibida":
+            self.cola.put(("imagen_exhibida", (datos.get("origen"), binario)))
             return
         if tipo == "estado":  # avisos del servidor (por ejemplo, error al capturar su pantalla)
             self.cola.put(("log", datos.get("mensaje", "")))
